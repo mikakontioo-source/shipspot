@@ -1,0 +1,17 @@
+{
+  "name": "ShipSpot",
+  "short_name": "ShipSpot",
+  "description": "Spot nearby ships in Finland using live AIS data.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071419",
+  "theme_color": "#071419",
+  "icons": [
+    {
+      "src": "/shipspot-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
