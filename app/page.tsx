@@ -31,6 +31,8 @@ type Spot = {
   mmsi: number;
   name: string;
   typeLabel: string;
+  type?: number | null;
+  lengthM?: number | null;
   date: string;
   lat: number;
   lon: number;
@@ -65,24 +67,47 @@ function ShipIcon({ size = 34 }: { size?: number }) {
 }
 
 
-function shipSilhouette(v: Pick<Vessel, "type" | "typeLabel">) {
+function shipSilhouette(
+  v: Pick<Vessel, "type" | "typeLabel"> & {
+    name?: string;
+    lengthM?: number | null;
+  }
+) {
   const type = v.type;
+  const name = (v.name || "").trim().toUpperCase();
+  const label = v.typeLabel.toLowerCase();
 
-  if (type === 36) return "/ships/generic.png";
+  // Finland-specific icebreakers. Arctia's current fleet + Ahto.
+  const finnishIcebreakers = new Set([
+    "POLARIS", "OTSO", "KONTIO", "VOIMA", "URHO",
+    "SISU", "FENNICA", "NORDICA", "AHTO"
+  ]);
+
+  if (finnishIcebreakers.has(name) || label.includes("icebreaker")) {
+    return "/ships/icebreaker.png";
+  }
+
+  // Passenger AIS codes do not reliably separate ferries from cruise ships.
+  // For the MVP, a large passenger vessel (>= 240 m) gets the cruise silhouette.
+  if (type !== null && type >= 60 && type <= 69) {
+    if ((v.lengthM ?? 0) >= 240) return "/ships/cruise.png";
+    return "/ships/ferry.png";
+  }
+
+  if (type === 36) return "/ships/sailing.png";
   if (type === 37) return "/ships/yacht.png";
-  if (type === 50 || type === 51 || type === 53 || type === 55) return "/ships/generic.png";
   if (type === 31 || type === 32 || type === 52) return "/ships/tug.png";
   if (type === 30) return "/ships/fishing.png";
-  if (type !== null && type >= 60 && type <= 69) return "/ships/ferry.png";
   if (type !== null && type >= 70 && type <= 79) return "/ships/cargo.png";
   if (type !== null && type >= 80 && type <= 89) return "/ships/tanker.png";
 
-  const label = v.typeLabel.toLowerCase();
+  if (label.includes("cruise")) return "/ships/cruise.png";
   if (label.includes("passenger")) return "/ships/ferry.png";
   if (label.includes("cargo")) return "/ships/cargo.png";
   if (label.includes("tanker")) return "/ships/tanker.png";
   if (label.includes("tug")) return "/ships/tug.png";
   if (label.includes("fishing")) return "/ships/fishing.png";
+  if (label.includes("sailing")) return "/ships/sailing.png";
   if (label.includes("pleasure")) return "/ships/yacht.png";
 
   return "/ships/generic.png";
@@ -234,6 +259,8 @@ export default function Home() {
       mmsi: v.mmsi,
       name: v.name,
       typeLabel: v.typeLabel,
+      type: v.type,
+      lengthM: v.lengthM,
       date: new Date().toISOString(),
       lat: position?.lat ?? 0,
       lon: position?.lon ?? 0,
@@ -455,7 +482,12 @@ export default function Home() {
                 <div className="spot-row" key={s.id}>
                   <div className="spot-badge">
                     <img
-                      src={shipSilhouette({ type: null, typeLabel: s.typeLabel } as Vessel)}
+                      src={shipSilhouette({
+                        type: s.type ?? null,
+                        typeLabel: s.typeLabel,
+                        name: s.name,
+                        lengthM: s.lengthM ?? null
+                      })}
                       alt=""
                       className="spot-silhouette"
                     />
