@@ -64,6 +64,30 @@ function ShipIcon({ size = 34 }: { size?: number }) {
   );
 }
 
+
+function shipSilhouette(v: Pick<Vessel, "type" | "typeLabel">) {
+  const type = v.type;
+
+  if (type === 36) return "/ships/generic.png";
+  if (type === 37) return "/ships/yacht.png";
+  if (type === 50 || type === 51 || type === 53 || type === 55) return "/ships/generic.png";
+  if (type === 31 || type === 32 || type === 52) return "/ships/tug.png";
+  if (type === 30) return "/ships/fishing.png";
+  if (type !== null && type >= 60 && type <= 69) return "/ships/ferry.png";
+  if (type !== null && type >= 70 && type <= 79) return "/ships/cargo.png";
+  if (type !== null && type >= 80 && type <= 89) return "/ships/tanker.png";
+
+  const label = v.typeLabel.toLowerCase();
+  if (label.includes("passenger")) return "/ships/ferry.png";
+  if (label.includes("cargo")) return "/ships/cargo.png";
+  if (label.includes("tanker")) return "/ships/tanker.png";
+  if (label.includes("tug")) return "/ships/tug.png";
+  if (label.includes("fishing")) return "/ships/fishing.png";
+  if (label.includes("pleasure")) return "/ships/yacht.png";
+
+  return "/ships/generic.png";
+}
+
 function NavIcon({ name }: { name: Tab }) {
   if (name === "nearby") return <ShipIcon size={22} />;
   if (name === "radar") return <span className="nav-glyph">◎</span>;
@@ -244,7 +268,9 @@ export default function Home() {
 
         <section className="ship-hero">
           <div className="ship-waterline" />
-          <div className="hero-ship"><ShipIcon size={124} /></div>
+          <div className="hero-ship">
+            <img src={shipSilhouette(selected)} alt="" />
+          </div>
           <div className="hero-distance">{fmtKm(selected.distanceKm)}</div>
         </section>
 
@@ -314,7 +340,7 @@ export default function Home() {
                 <div className="nearest-top">
                   <div className="ship-visual">
                     <div className="water" />
-                    <ShipIcon size={88} />
+                    <img src={shipSilhouette(nearest)} alt="" className="nearest-silhouette" />
                   </div>
                   <div className="distance-badge">{fmtKm(nearest.distanceKm)}</div>
                 </div>
@@ -338,7 +364,9 @@ export default function Home() {
               <div className="vessel-list">
                 {vessels.slice(1).map((v) => (
                   <button key={v.mmsi} className="vessel-row" onClick={() => setSelected(v)}>
-                    <div className="row-icon"><ShipIcon size={26} /></div>
+                    <div className="row-icon">
+                      <img src={shipSilhouette(v)} alt="" className="row-silhouette" />
+                    </div>
                     <div className="row-main">
                       <strong>{v.name}</strong>
                       <span>{v.typeLabel}</span>
@@ -425,7 +453,13 @@ export default function Home() {
             <div className="spots-list">
               {spots.map((s) => (
                 <div className="spot-row" key={s.id}>
-                  <div className="spot-badge"><ShipIcon size={28} /></div>
+                  <div className="spot-badge">
+                    <img
+                      src={shipSilhouette({ type: null, typeLabel: s.typeLabel } as Vessel)}
+                      alt=""
+                      className="spot-silhouette"
+                    />
+                  </div>
                   <div>
                     <strong>{s.name}</strong>
                     <span>{s.typeLabel}</span>
