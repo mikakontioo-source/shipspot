@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 type Vessel = {
   mmsi: number;
@@ -37,11 +37,15 @@ type Spot = {
   lat: number;
   lon: number;
   distanceKm: number;
+  photoDataUrl?: string;
 };
 
 type Tab = "nearby" | "radar" | "spots" | "settings";
+type LocationPreset = "gps" | "helsinki" | "suomenlinna";
 
 const HELSINKI = { lat: 60.1675, lon: 24.9537 };
+const SUOMENLINNA = { lat: 60.1457, lon: 24.9865 };
+const AUTO_REFRESH_SECONDS = 15;
 
 function Arrow({ deg = 0, size = 20 }: { deg?: number; size?: number }) {
   return (
@@ -66,7 +70,6 @@ function ShipIcon({ size = 34 }: { size?: number }) {
   );
 }
 
-
 function shipSilhouette(
   v: Pick<Vessel, "type" | "typeLabel"> & {
     name?: string;
@@ -77,20 +80,29 @@ function shipSilhouette(
   const name = (v.name || "").trim().toUpperCase();
   const label = v.typeLabel.toLowerCase();
 
-  // Finland-specific icebreakers. Arctia's current fleet + Ahto.
   const finnishIcebreakers = new Set([
     "POLARIS", "OTSO", "KONTIO", "VOIMA", "URHO",
     "SISU", "FENNICA", "NORDICA", "AHTO"
   ]);
 
+  const lossiNames = [
+    "SUOMENLINNA",
+    "SUOKKI",
+    "ISOSAARI",
+    "AURINKOLAUTTA"
+  ];
+
   if (finnishIcebreakers.has(name) || label.includes("icebreaker")) {
     return "/ships/icebreaker.png";
   }
 
-  // Passenger AIS codes do not reliably separate ferries from cruise ships.
-  // For the MVP, a large passenger vessel (>= 240 m) gets the cruise silhouette.
+  if (lossiNames.some((token) => name.includes(token))) {
+    return "/ships/lossi.svg";
+  }
+
   if (type !== null && type >= 60 && type <= 69) {
     if ((v.lengthM ?? 0) >= 240) return "/ships/cruise.png";
+    if ((v.lengthM ?? 0) > 0 && (v.lengthM ?? 0) <= 100) return "/ships/lossi.svg";
     return "/ships/ferry.png";
   }
 
@@ -102,6 +114,7 @@ function shipSilhouette(
   if (type !== null && type >= 80 && type <= 89) return "/ships/tanker.png";
 
   if (label.includes("cruise")) return "/ships/cruise.png";
+  if (label.includes("ferry") || label.includes("lossi")) return "/ships/lossi.svg";
   if (label.includes("passenger")) return "/ships/ferry.png";
   if (label.includes("cargo")) return "/ships/cargo.png";
   if (label.includes("tanker")) return "/ships/tanker.png";
@@ -156,6 +169,28 @@ function useLocalStorageNumber(key: string, fallback: number) {
   return [value, save] as const;
 }
 
+function useLocalStorageBoolean(key: string, fallback: boolean) {
+  const [value, setValue] = useState(fallback);
+  useEffect(() => {
+    const saved = window.localStorage.getItem(key);
+    if (saved !== null) setValue(saved === "true");
+  }, [key]);
+  const save = (next: boolean) => {
+    setValue(next);
+    window.localStorage.setItem(key, String(next));
+  };
+  return [value, save] as const;
+}
+
+function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Unable to read image."));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function Home() {
   const [tab, setTab] = useState<Tab>("nearby");
   const [selected, setSelected] = useState<Vessel | null>(null);
@@ -167,6 +202,10 @@ export default function Home() {
   const [error, setError] = useState("");
   const [spots, setSpots] = useState<Spot[]>([]);
   const [radius, setRadius] = useLocalStorageNumber("shipspot-radius", 25);
+  const [autoRefresh, setAutoRefresh] = useLocalStorageBoolean("shipspot-auto-refresh", true);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [locationPreset, setLocationPreset] = useState<LocationPreset>("gps");
 
   useEffect(() => {
     try {
@@ -180,12 +219,33 @@ export default function Home() {
     localStorage.setItem("shipspot-spots", JSON.stringify(next));
   }
 
+  function upsertSpot(v: Vessel, photoDataUrl?: string) {
+    const current = spots.find((s) => s.mmsi === v.mmsi);
+    const nextSpot: Spot = {
+      id: current?.id ?? `${v.mmsi}-${Date.now()}`,
+      mmsi: v.mmsi,
+      name: v.name,
+      typeLabel: v.typeLabel,
+      type: v.type,
+      lengthM: v.lengthM,
+      date: new Date().toISOString(),
+      lat: position?.lat ?? 0,
+      lon: position?.lon ?? 0,
+      distanceKm: v.distanceKm,
+      photoDataUrl: photoDataUrl ?? current?.photoDataUrl
+    };
+
+    const filtered = spots.filter((s) => s.mmsi !== v.mmsi);
+    persistSpots([nextSpot, ...filtered]);
+  }
+
   async function loadNearby(
     pos: { lat: number; lon: number },
     useCache = true,
-    radiusOverride?: number
+    radiusOverride?: number,
+    silent = false
   ) {
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError("");
     try {
       const res = await fetch(
@@ -197,6 +257,11 @@ export default function Home() {
       const next = Array.isArray(data.vessels) ? data.vessels : [];
       setVessels(next);
       setStatus("LIVE");
+      setLastUpdatedAt(Date.now());
+      if (selected) {
+        const selectedUpdate = next.find((item: Vessel) => item.mmsi === selected.mmsi);
+        if (selectedUpdate) setSelected(selectedUpdate);
+      }
       localStorage.setItem(
         "shipspot-last-nearby",
         JSON.stringify({ savedAt: Date.now(), vessels: next })
@@ -208,6 +273,7 @@ export default function Home() {
           if (cached?.vessels?.length) {
             setVessels(cached.vessels);
             setStatus("CACHED");
+            setLastUpdatedAt(cached.savedAt ?? null);
             setError("Live AIS unavailable — showing the last saved vessels.");
             return;
           }
@@ -216,12 +282,30 @@ export default function Home() {
       setError(e instanceof Error ? e.message : "Unable to load AIS data.");
       setStatus("OFFLINE");
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
+  }
+
+  function usePresetLocation(preset: LocationPreset) {
+    setLocationPreset(preset);
+    if (preset === "helsinki") {
+      setPosition(HELSINKI);
+      setLocationLabel("Helsinki harbour test position");
+      loadNearby(HELSINKI);
+      return;
+    }
+    if (preset === "suomenlinna") {
+      setPosition(SUOMENLINNA);
+      setLocationLabel("Suomenlinna test position");
+      loadNearby(SUOMENLINNA);
+      return;
+    }
+    requestLocation();
   }
 
   function requestLocation() {
     setLoading(true);
+    setLocationPreset("gps");
     setLocationLabel("Finding your location");
     if (!navigator.geolocation) {
       setPosition(HELSINKI);
@@ -240,6 +324,7 @@ export default function Home() {
       () => {
         setPosition(HELSINKI);
         setLocationLabel("Helsinki test position");
+        setLocationPreset("helsinki");
         setError("GPS permission was not available. Using Helsinki test position.");
         loadNearby(HELSINKI);
       },
@@ -249,24 +334,30 @@ export default function Home() {
 
   useEffect(() => {
     requestLocation();
-    // Radius changes are handled from Settings refresh to avoid duplicate geolocation prompts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function spot(v: Vessel) {
-    const nextSpot: Spot = {
-      id: `${v.mmsi}-${Date.now()}`,
-      mmsi: v.mmsi,
-      name: v.name,
-      typeLabel: v.typeLabel,
-      type: v.type,
-      lengthM: v.lengthM,
-      date: new Date().toISOString(),
-      lat: position?.lat ?? 0,
-      lon: position?.lon ?? 0,
-      distanceKm: v.distanceKm
-    };
-    persistSpots([nextSpot, ...spots]);
+  useEffect(() => {
+    if (!autoRefresh || !position) return;
+    const interval = window.setInterval(() => {
+      loadNearby(position, true, undefined, true);
+    }, AUTO_REFRESH_SECONDS * 1000);
+    return () => window.clearInterval(interval);
+  }, [autoRefresh, position, radius]);
+
+  async function handlePhotoChange(e: ChangeEvent<HTMLInputElement>, vessel: Vessel) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setPhotoBusy(true);
+      const dataUrl = await fileToDataUrl(file);
+      upsertSpot(vessel, dataUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to save photo.");
+    } finally {
+      e.target.value = "";
+      setPhotoBusy(false);
+    }
   }
 
   function goTab(next: Tab) {
@@ -282,7 +373,8 @@ export default function Home() {
   );
 
   if (selected) {
-    const alreadySpotted = spots.some((s) => s.mmsi === selected.mmsi);
+    const currentSpot = spots.find((s) => s.mmsi === selected.mmsi);
+    const alreadySpotted = Boolean(currentSpot);
     return (
       <main className="app-shell detail-shell">
         <header className="topbar">
@@ -290,7 +382,7 @@ export default function Home() {
             ←
           </button>
           <div className="topbar-title">{selected.name}</div>
-          <div className="live-pill"><span /> {status}</div>
+          <div className={`live-pill ${status.toLowerCase()}`}><span /> {status}</div>
         </header>
 
         <section className="ship-hero">
@@ -328,12 +420,30 @@ export default function Home() {
             <div><span>Call sign</span><b>{selected.callSign || "—"}</b></div>
           </div>
 
-          <button
-            className={`spot-button ${alreadySpotted ? "spotted" : ""}`}
-            onClick={() => !alreadySpotted && spot(selected)}
-          >
-            {alreadySpotted ? "✓ SPOTTED" : "✓ I SPOTTED THIS"}
-          </button>
+          <div className="detail-actions">
+            <button
+              className={`spot-button ${alreadySpotted ? "spotted" : ""}`}
+              onClick={() => upsertSpot(selected)}
+            >
+              {alreadySpotted ? "✓ UPDATE SPOT" : "✓ I SPOTTED THIS"}
+            </button>
+
+            <label className="photo-button">
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => handlePhotoChange(e, selected)}
+              />
+              {photoBusy ? "Saving photo..." : currentSpot?.photoDataUrl ? "Update photo" : "Add photo"}
+            </label>
+          </div>
+
+          {currentSpot?.photoDataUrl && (
+            <div className="spot-photo-panel">
+              <img src={currentSpot.photoDataUrl} alt={`Photo of ${selected.name}`} />
+            </div>
+          )}
         </section>
         <div className="source-note">AIS: Fintraffic / Digitraffic</div>
       </main>
@@ -346,6 +456,9 @@ export default function Home() {
         <div>
           <div className="brand">SHIP<span>SPOT</span></div>
           <div className="subbrand">{locationLabel}</div>
+          {lastUpdatedAt && (
+            <div className="subbrand tiny">Updated {new Date(lastUpdatedAt).toLocaleTimeString()}</div>
+          )}
         </div>
         <div className={`live-pill ${status.toLowerCase()}`}><span /> {status}</div>
       </header>
@@ -385,7 +498,9 @@ export default function Home() {
 
               <div className="list-head">
                 <span>NEARBY</span>
-                <span>{vessels.length} vessels · {radius} km</span>
+                <span>
+                  {vessels.length} vessels · {radius} km · {autoRefresh ? `auto ${AUTO_REFRESH_SECONDS}s` : "manual"}
+                </span>
               </div>
 
               <div className="vessel-list">
@@ -480,17 +595,21 @@ export default function Home() {
             <div className="spots-list">
               {spots.map((s) => (
                 <div className="spot-row" key={s.id}>
-                  <div className="spot-badge">
-                    <img
-                      src={shipSilhouette({
-                        type: s.type ?? null,
-                        typeLabel: s.typeLabel,
-                        name: s.name,
-                        lengthM: s.lengthM ?? null
-                      })}
-                      alt=""
-                      className="spot-silhouette"
-                    />
+                  <div className={`spot-badge ${s.photoDataUrl ? "photo" : ""}`}>
+                    {s.photoDataUrl ? (
+                      <img src={s.photoDataUrl} alt={`Photo of ${s.name}`} className="spot-thumb" />
+                    ) : (
+                      <img
+                        src={shipSilhouette({
+                          type: s.type ?? null,
+                          typeLabel: s.typeLabel,
+                          name: s.name,
+                          lengthM: s.lengthM ?? null
+                        })}
+                        alt=""
+                        className="spot-silhouette"
+                      />
+                    )}
                   </div>
                   <div>
                     <strong>{s.name}</strong>
@@ -530,8 +649,21 @@ export default function Home() {
             <small>kilometres</small>
           </div>
 
-          <button className="settings-row" onClick={requestLocation}>
-            <div><strong>GPS location</strong><span>{locationLabel}</span></div><b>Refresh</b>
+          <div className="settings-card">
+            <div className="setting-title">Test / location mode</div>
+            <div className="segmented preset-grid">
+              <button className={locationPreset === "gps" ? "active" : ""} onClick={() => usePresetLocation("gps")}>GPS</button>
+              <button className={locationPreset === "helsinki" ? "active" : ""} onClick={() => usePresetLocation("helsinki")}>Harbour</button>
+              <button className={locationPreset === "suomenlinna" ? "active" : ""} onClick={() => usePresetLocation("suomenlinna")}>Suomenlinna</button>
+            </div>
+            <small>Quick test positions for shore-side checking</small>
+          </div>
+
+          <button className="settings-row" onClick={() => setAutoRefresh(!autoRefresh)}>
+            <div><strong>Auto refresh</strong><span>Refresh nearby AIS every {AUTO_REFRESH_SECONDS} seconds</span></div><b>{autoRefresh ? "On" : "Off"}</b>
+          </button>
+          <button className="settings-row" onClick={() => position && loadNearby(position, true, undefined, false)}>
+            <div><strong>Refresh now</strong><span>{locationLabel}</span></div><b>Run</b>
           </button>
           <div className="settings-row static">
             <div><strong>Offline cache</strong><span>Last successful nearby list</span></div><b>On</b>
@@ -542,7 +674,7 @@ export default function Home() {
 
           <div className="about-card">
             <div className="brand small">SHIP<span>SPOT</span></div>
-            <p>Finland MVP · v0.1</p>
+            <p>Finland MVP · v0.5</p>
             <p>Vessel positions and metadata: Fintraffic / Digitraffic.</p>
           </div>
         </section>

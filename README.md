@@ -1,4 +1,4 @@
-# ShipSpot – Finland MVP v0.1
+# ShipSpot – Finland MVP v0.7
 
 A mobile-first ShipSpot prototype using Finnish live AIS data from Fintraffic / Digitraffic.
 
@@ -11,6 +11,9 @@ A mobile-first ShipSpot prototype using Finnish live AIS data from Fintraffic / 
 - Ship detail view
 - Radar view
 - “I spotted this” local logbook
+- Add or update a photo when spotting a ship
+- Automatic AIS refresh every 15 seconds (toggleable)
+- Helsinki harbour / Suomenlinna quick test locations
 - Last successful nearby response cached locally
 - Helsinki fallback position if GPS is unavailable
 - Installable PWA manifest
@@ -65,3 +68,15 @@ Before public release, add the exact CC BY 4.0 attribution wording and link to t
 5. Add map layer after radar is stable.
 6. Move from periodic REST refresh to MQTT/WebSocket when useful.
 7. Wrap as native store app (e.g. Capacitor) after the web/PWA flow is stable.
+
+
+## UI styling update
+
+UI styling follows a simple rule:
+- filled shapes: no outline
+- unfilled shapes: outline only
+
+
+## Typography
+
+Primary UI font: Instrument Sans (Google Fonts).
